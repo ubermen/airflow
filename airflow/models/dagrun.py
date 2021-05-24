@@ -38,7 +38,7 @@ from sqlalchemy.orm.session import Session
 
 from airflow import settings
 from airflow.configuration import conf as airflow_conf
-from airflow.exceptions import AirflowException, TaskNotFound
+from airflow.exceptions import AirflowException, TaskNotFound, AirflowNotFoundException
 from airflow.models.base import ID_LEN, Base
 from airflow.models.taskinstance import TaskInstance as TI
 from airflow.stats import Stats
@@ -171,12 +171,12 @@ class DagRun(Base, LoggingMixin):
 
         dr = (
             session.query(DR)
-            .filter(
+                .filter(
                 DR.dag_id == self.dag_id,
                 func.cast(DR.execution_date, DateTime) == exec_date,
                 DR.run_id == self.run_id,
             )
-            .one()
+                .one()
         )
 
         self.id = dr.id
@@ -205,16 +205,16 @@ class DagRun(Base, LoggingMixin):
         # TODO: Bake this query, it is run _A lot_
         query = (
             session.query(cls)
-            .filter(cls.state == State.RUNNING, cls.run_type != DagRunType.BACKFILL_JOB)
-            .join(
+                .filter(cls.state == State.RUNNING, cls.run_type != DagRunType.BACKFILL_JOB)
+                .join(
                 DagModel,
                 DagModel.dag_id == cls.dag_id,
             )
-            .filter(
+                .filter(
                 DagModel.is_paused.is_(False),
                 DagModel.is_active.is_(True),
             )
-            .order_by(
+                .order_by(
                 nulls_first(cls.last_scheduling_decision, session=session),
                 cls.execution_date,
             )
@@ -339,8 +339,8 @@ class DagRun(Base, LoggingMixin):
         """
         return (
             session.query(TI)
-            .filter(TI.dag_id == self.dag_id, TI.execution_date == self.execution_date, TI.task_id == task_id)
-            .first()
+                .filter(TI.dag_id == self.dag_id, TI.execution_date == self.execution_date, TI.task_id == task_id)
+                .first()
         )
 
     def get_dag(self) -> "DAG":
@@ -372,11 +372,11 @@ class DagRun(Base, LoggingMixin):
 
         return (
             session.query(DagRun)
-            .filter(
+                .filter(
                 DagRun.dag_id == self.dag_id,
                 DagRun.execution_date == dag.previous_schedule(self.execution_date),
             )
-            .first()
+                .first()
         )
 
     @provide_session
@@ -699,12 +699,12 @@ class DagRun(Base, LoggingMixin):
         """
         return (
             session.query(DagRun)
-            .filter(
+                .filter(
                 DagRun.dag_id == dag_id,
                 DagRun.external_trigger == False,  # noqa pylint: disable=singleton-comparison
                 DagRun.execution_date == execution_date,
             )
-            .first()
+                .first()
         )
 
     @property
@@ -717,16 +717,16 @@ class DagRun(Base, LoggingMixin):
         """Returns the latest DagRun for each DAG"""
         subquery = (
             session.query(cls.dag_id, func.max(cls.execution_date).label('execution_date'))
-            .group_by(cls.dag_id)
-            .subquery()
+                .group_by(cls.dag_id)
+                .subquery()
         )
         return (
             session.query(cls)
-            .join(
+                .join(
                 subquery,
                 and_(cls.dag_id == subquery.c.dag_id, cls.execution_date == subquery.c.execution_date),
             )
-            .all()
+                .all()
         )
 
     @provide_session
@@ -760,24 +760,24 @@ class DagRun(Base, LoggingMixin):
         if schedulable_ti_ids:
             count += (
                 session.query(TI)
-                .filter(
+                    .filter(
                     TI.dag_id == self.dag_id,
                     TI.execution_date == self.execution_date,
                     TI.task_id.in_(schedulable_ti_ids),
                 )
-                .update({TI.state: State.SCHEDULED}, synchronize_session=False)
+                    .update({TI.state: State.SCHEDULED}, synchronize_session=False)
             )
 
         # Tasks using DummyOperator should not be executed, mark them as success
         if dummy_ti_ids:
             count += (
                 session.query(TI)
-                .filter(
+                    .filter(
                     TI.dag_id == self.dag_id,
                     TI.execution_date == self.execution_date,
                     TI.task_id.in_(dummy_ti_ids),
                 )
-                .update(
+                    .update(
                     {
                         TI.state: State.SUCCESS,
                         TI.start_date: timezone.utcnow(),
@@ -789,3 +789,69 @@ class DagRun(Base, LoggingMixin):
             )
 
         return count
+
+    # yaml custom apis
+    @provide_session
+    def get_latest_task_instance(self, session=None):
+        """
+        yaml custom method
+        """
+        from airflow.models.taskinstance import TaskInstance  # Avoid circular import
+        TI = TaskInstance
+        tis = session.query(TI).filter(
+            TI.dag_id == self.dag_id,
+            TI.execution_date == self.execution_date,
+            or_(TI.state == State.RUNNING, TI.state == State.SUCCESS, TI.state == State.FAILED)
+        ).all()
+
+        if len(tis) == 0:
+            return None
+
+        latest_ti = tis[0]
+        for ti in tis[1:]:
+            latest_start_date = latest_ti.start_date
+            start_date = ti.start_date
+
+            if start_date is None:
+                continue
+            elif latest_start_date is None:
+                latest_ti = ti
+            elif latest_start_date < start_date:
+                latest_ti = ti
+
+        return latest_ti
+
+    # yaml custom apis
+    @provide_session
+    def get_xcoms(self, session=None):
+        """
+        yaml custom api
+        """
+        from airflow.models import XCom
+
+        XC = XCom
+        xcomlist = session.query(XC).filter(
+            XC.dag_id == self.dag_id,
+            XC.execution_date == self.execution_date
+        ).all()
+
+        return xcomlist
+
+    @provide_session
+    def get_xcom(self, key, session=None):
+        """
+        yaml custom api
+        """
+        from airflow.models import XCom
+
+        XC = XCom
+        xcom = session.query(XC).filter(
+            XC.dag_id == self.dag_id,
+            XC.execution_date == self.execution_date,
+            XC.key == key
+        ).first()
+
+        if xcom is None:
+            raise AirflowNotFoundException(f"Not found {key} xcom")
+
+        return xcom

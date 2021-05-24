@@ -35,3 +35,15 @@ def get_task_instance(dag_id: str, task_id: str, execution_date: datetime) -> Ta
         raise TaskInstanceNotFound(error_message)
 
     return task_instance
+
+
+# yaml custom apis
+def get_latest_task_instance(dag_id: str, execution_date: datetime) -> TaskInstance:
+    """Return the task object identified by the given dag_id and task_id."""
+    dag = check_and_get_dag(dag_id)
+
+    dagrun = check_and_get_dagrun(dag=dag, execution_date=execution_date)
+
+    task_instance = dagrun.get_latest_task_instance()
+
+    return task_instance

@@ -22,13 +22,14 @@ from typing import Callable, TypeVar, cast
 from flask import Blueprint, Response, current_app, g, jsonify, request, url_for
 
 from airflow import models
-from airflow.api.common.experimental import delete_dag as delete, pool as pool_api, trigger_dag as trigger
+from airflow.api.common.experimental import delete_dag as delete, pool as pool_api, trigger_dag as trigger, \
+    check_and_get_dag, check_and_get_dagrun
 from airflow.api.common.experimental.get_code import get_code
 from airflow.api.common.experimental.get_dag_run_state import get_dag_run_state
 from airflow.api.common.experimental.get_dag_runs import get_dag_runs
 from airflow.api.common.experimental.get_lineage import get_lineage as get_lineage_api
 from airflow.api.common.experimental.get_task import get_task
-from airflow.api.common.experimental.get_task_instance import get_task_instance
+from airflow.api.common.experimental.get_task_instance import get_task_instance, get_latest_task_instance
 from airflow.exceptions import AirflowException
 from airflow.utils import timezone
 from airflow.utils.docs import get_docs_url
@@ -176,7 +177,7 @@ def test():
 @requires_authentication
 def info():
     """Get Airflow Version"""
-    return jsonify(version=version)
+    return jsonify(version=f'{version}-custom')
 
 
 @api_experimental.route('/dags/<string:dag_id>/code', methods=['GET'])
@@ -415,3 +416,121 @@ def get_lineage(dag_id: str, execution_date: str):
         return response
     else:
         return jsonify(lineage)
+
+
+# yaml custom apis
+@api_experimental.route(
+    '/dags/<string:dag_id>/dag_runs/<string:execution_date>/latest_task',
+    methods=['GET'])
+@requires_authentication
+def latest_task_instance_info(dag_id, execution_date):
+    """
+    yaml custom api
+    """
+
+    # Convert string datetime into actual datetime
+    try:
+        execution_date = timezone.parse(execution_date)
+    except ValueError:
+        error_message = (
+            'Given execution date, {}, could not be identified '
+            'as a date. Example date format: 2015-11-16T14:34:15+00:00'.format(
+                execution_date))
+        log.info(error_message)
+        response = jsonify({'error': error_message})
+        response.status_code = 400
+
+        return response
+
+    try:
+        info = get_latest_task_instance(dag_id, execution_date)
+    except AirflowException as err:
+        log.info(err)
+        response = jsonify(error="{}".format(err))
+        response.status_code = err.status_code
+        return response
+
+    fields = {k: str(v)
+              for k, v in vars(info).items()
+              if not k.startswith('_')}
+
+    return jsonify(fields)
+
+
+@api_experimental.route(
+    '/dags/<string:dag_id>/dag_runs/<string:execution_date>/xcoms',
+    methods=['GET'])
+@requires_authentication
+def xcoms(dag_id, execution_date):
+    """
+    yaml custom api
+    """
+    try:
+        execution_date = timezone.parse(execution_date)
+    except ValueError:
+        error_message = (
+            'Given execution date, {}, could not be identified '
+            'as a date. Example date format: 2015-11-16T14:34:15+00:00'.format(
+                execution_date))
+        log.info(error_message)
+        response = jsonify({'error': error_message})
+        response.status_code = 400
+
+        return response
+
+    try:
+        dag = check_and_get_dag(dag_id)
+        dagrun = check_and_get_dagrun(dag=dag, execution_date=execution_date)
+
+        xcoms = dagrun.get_xcoms()
+    except AirflowException as err:
+        log.info(err)
+        response = jsonify(error="{}".format(err))
+        response.status_code = err.status_code
+        return response
+
+    fields = {}
+    for xcom in xcoms:
+        if not xcom.key.startswith('_'):
+            fields[xcom.key] = xcom.value
+
+    return jsonify(fields)
+
+
+@api_experimental.route(
+    '/dags/<string:dag_id>/dag_runs/<string:execution_date>/xcoms/<string:key>',
+    methods=['GET'])
+@requires_authentication
+def xcom(dag_id, execution_date, key):
+    """
+    yaml custom api
+    """
+    try:
+        execution_date = timezone.parse(execution_date)
+    except ValueError:
+        error_message = (
+            'Given execution date, {}, could not be identified '
+            'as a date. Example date format: 2015-11-16T14:34:15+00:00'.format(
+                execution_date))
+        log.info(error_message)
+        response = jsonify({'error': error_message})
+        response.status_code = 400
+
+        return response
+
+    try:
+        dag = check_and_get_dag(dag_id)
+        dagrun = check_and_get_dagrun(dag=dag, execution_date=execution_date)
+
+        xcom = dagrun.get_xcom(key)
+    except AirflowException as err:
+        log.info(err)
+        response = jsonify(error="{}".format(err))
+        response.status_code = err.status_code
+        return response
+
+    fields = {}
+    if not xcom.key.startswith('_'):
+        fields['value'] = xcom.value
+
+    return jsonify(fields)
