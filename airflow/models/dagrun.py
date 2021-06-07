@@ -35,6 +35,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import backref, relationship, synonym
 from sqlalchemy.orm.session import Session
+from sqlalchemy.sql import expression
 
 from airflow import settings
 from airflow.configuration import conf as airflow_conf
@@ -171,12 +172,12 @@ class DagRun(Base, LoggingMixin):
 
         dr = (
             session.query(DR)
-                .filter(
+            .filter(
                 DR.dag_id == self.dag_id,
                 func.cast(DR.execution_date, DateTime) == exec_date,
                 DR.run_id == self.run_id,
             )
-                .one()
+            .one()
         )
 
         self.id = dr.id
@@ -205,16 +206,16 @@ class DagRun(Base, LoggingMixin):
         # TODO: Bake this query, it is run _A lot_
         query = (
             session.query(cls)
-                .filter(cls.state == State.RUNNING, cls.run_type != DagRunType.BACKFILL_JOB)
-                .join(
+            .filter(cls.state == State.RUNNING, cls.run_type != DagRunType.BACKFILL_JOB)
+            .join(
                 DagModel,
                 DagModel.dag_id == cls.dag_id,
             )
-                .filter(
+            .filter(
                 DagModel.is_paused.is_(False),
                 DagModel.is_active.is_(True),
             )
-                .order_by(
+            .order_by(
                 nulls_first(cls.last_scheduling_decision, session=session),
                 cls.execution_date,
             )
@@ -339,8 +340,8 @@ class DagRun(Base, LoggingMixin):
         """
         return (
             session.query(TI)
-                .filter(TI.dag_id == self.dag_id, TI.execution_date == self.execution_date, TI.task_id == task_id)
-                .first()
+            .filter(TI.dag_id == self.dag_id, TI.execution_date == self.execution_date, TI.task_id == task_id)
+            .first()
         )
 
     def get_dag(self) -> "DAG":
@@ -372,11 +373,11 @@ class DagRun(Base, LoggingMixin):
 
         return (
             session.query(DagRun)
-                .filter(
+            .filter(
                 DagRun.dag_id == self.dag_id,
                 DagRun.execution_date == dag.previous_schedule(self.execution_date),
             )
-                .first()
+            .first()
         )
 
     @provide_session
@@ -699,12 +700,12 @@ class DagRun(Base, LoggingMixin):
         """
         return (
             session.query(DagRun)
-                .filter(
+            .filter(
                 DagRun.dag_id == dag_id,
                 DagRun.external_trigger == False,  # noqa pylint: disable=singleton-comparison
                 DagRun.execution_date == execution_date,
             )
-                .first()
+            .first()
         )
 
     @property
@@ -717,16 +718,16 @@ class DagRun(Base, LoggingMixin):
         """Returns the latest DagRun for each DAG"""
         subquery = (
             session.query(cls.dag_id, func.max(cls.execution_date).label('execution_date'))
-                .group_by(cls.dag_id)
-                .subquery()
+            .group_by(cls.dag_id)
+            .subquery()
         )
         return (
             session.query(cls)
-                .join(
+            .join(
                 subquery,
                 and_(cls.dag_id == subquery.c.dag_id, cls.execution_date == subquery.c.execution_date),
             )
-                .all()
+            .all()
         )
 
     @provide_session
@@ -760,24 +761,24 @@ class DagRun(Base, LoggingMixin):
         if schedulable_ti_ids:
             count += (
                 session.query(TI)
-                    .filter(
+                .filter(
                     TI.dag_id == self.dag_id,
                     TI.execution_date == self.execution_date,
                     TI.task_id.in_(schedulable_ti_ids),
                 )
-                    .update({TI.state: State.SCHEDULED}, synchronize_session=False)
+                .update({TI.state: State.SCHEDULED}, synchronize_session=False)
             )
 
         # Tasks using DummyOperator should not be executed, mark them as success
         if dummy_ti_ids:
             count += (
                 session.query(TI)
-                    .filter(
+                .filter(
                     TI.dag_id == self.dag_id,
                     TI.execution_date == self.execution_date,
                     TI.task_id.in_(dummy_ti_ids),
                 )
-                    .update(
+                .update(
                     {
                         TI.state: State.SUCCESS,
                         TI.start_date: timezone.utcnow(),
